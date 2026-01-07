@@ -7,6 +7,7 @@
 #include <fstream>
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <nfd.h>
 
@@ -18,13 +19,13 @@ struct LogEntry {
     std::string FullText;
     std::string Category;
     LogLevel Level = LogLevel::Error;
-    size_t ContentHash; // <--- NEW: Stores the ID of the error message
-    bool IsHeader;      // <--- NEW: To easily track if this is a start of a new log
+    size_t ContentHash = 0;
+    bool IsHeader = false;
+    int LogIndex = 0;
 };
 
-// --- 2. PARSER HELPER ---
 // UE Logs usually look like:
-// [2024.01.01-14.22.33:123][  0]LogCook: Error: Missing Texture...
+// [2024.01.01-14.22.33:123] LogCook: Error: Missing Texture...
 // We want to extract "LogCook" (Category) and "Error" (Level)
 void ParseLogLine(const std::string& line, LogEntry& entry) {
     entry.FullText = line;
@@ -44,17 +45,18 @@ void ParseLogLine(const std::string& line, LogEntry& entry) {
     if (catStart != std::string::npos) {
         // Found standard UE category format like [123]LogTemp:
         catStart++; // Skip ']'
-        size_t catEnd = line.find(":", catStart);
+        const size_t catEnd = line.find(':', catStart);
         if (catEnd != std::string::npos) {
             entry.Category = line.substr(catStart, catEnd - catStart);
         }
     }
 }
 
-// --- 3. APPLICATION STATE ---
 struct LogViewerState {
     std::vector<LogEntry> AllLogs;
     std::vector<int> FilteredIndices; // Indices of logs that match current filters
+
+    std::map<LogLevel, int> LevelsCount; // Number of logs of each LogLevel
 
     std::set<int> SelectedIndices; // Stores indices of the *filtered* list
     int LastClickedIndex = -1;     // Used for Shift+Click ranges
@@ -67,11 +69,10 @@ struct LogViewerState {
     std::string SelectedCategory = "All";
     std::set<std::string> UniqueCategories; // To populate the dropdown
 
-    bool ShowDuplicates = true; // <--- Add this variable to your struct!
+    bool ShowDuplicates = true;
 
-    // Helper to determine log properties from the full text
     static void ParseProperties(LogEntry& entry) {
-        // 1. Default Defaults
+        // 1. Default values
         entry.Level = LogLevel::Display;
         entry.Category = "General";
 
@@ -92,7 +93,7 @@ struct LogViewerState {
         if (catStart != std::string::npos) {
             // Check if it is preceded by ']' or '> ' or ' '
             if (catStart > 0 && (entry.FullText[catStart-1] == ']' || entry.FullText[catStart-1] == ' ' || entry.FullText[catStart-1] == ':')) {
-                size_t catEnd = entry.FullText.find(":", catStart);
+                size_t catEnd = entry.FullText.find(':', catStart);
                 if (catEnd != std::string::npos) {
                     entry.Category = entry.FullText.substr(catStart, catEnd - catStart);
                 }
@@ -114,16 +115,20 @@ struct LogViewerState {
         LogLevel currentLevel = LogLevel::Display;
         std::string currentCategory = "General";
 
+        int CurrentIndex = -1;
         while (std::getline(file, line)) {
             // Stop at summary
             if (line.find("Warning/Error Summary") != std::string::npos) break;
             if (line.empty()) continue;
 
+            CurrentIndex++;
+
             LogEntry entry;
             entry.FullText = line;
+            entry.LogIndex = CurrentIndex;
 
             // --- 1. IDENTIFY IF HEADER OR CONTINUATION ---
-            if (line.length() > 0 && line[0] == '[') {
+            if (!line.empty() && line[0] == '[') {
                 entry.IsHeader = true;
 
                 // --- 2. PARSE PROPERTIES ---
@@ -144,7 +149,7 @@ struct LogViewerState {
                 if (catStart != std::string::npos) {
                      // Safety check to ensure it's the category tag
                     if (catStart > 0 && (line[catStart-1] == ']' || line[catStart-1] == ' ' || line[catStart-1] == ':')) {
-                        size_t catEnd = line.find(":", catStart);
+                        size_t catEnd = line.find(':', catStart);
                         if (catEnd != std::string::npos) {
                             entry.Category = line.substr(catStart, catEnd - catStart);
                         }
@@ -171,6 +176,7 @@ struct LogViewerState {
             }
 
             AllLogs.push_back(entry);
+            LevelsCount[entry.Level]++;
             UniqueCategories.insert(entry.Category);
         }
         ApplyFilters();
@@ -182,7 +188,7 @@ struct LogViewerState {
         SelectedIndices.clear();
         LastClickedIndex = -1;
         std::string search(SearchBuffer);
-        std::transform(search.begin(), search.end(), search.begin(), ::tolower);
+        std::ranges::transform(search, search.begin(), ::tolower);
 
         std::set<size_t> seenHashes;
         bool isSkippingDuplicates = false;
@@ -195,7 +201,7 @@ struct LogViewerState {
             // --- DUPLICATE HANDLING ---
             if (log.IsHeader) {
                 // If this is a header, check if we've seen it before
-                if (!ShowDuplicates && seenHashes.count(log.ContentHash) > 0) {
+                if (!ShowDuplicates && seenHashes.contains(log.ContentHash)) {
                     isSkippingDuplicates = true; // Start skipping this entire block
                 } else {
                     isSkippingDuplicates = false; // Valid unique entry, stop skipping
@@ -215,7 +221,7 @@ struct LogViewerState {
 
             if (!search.empty()) {
                 std::string logLower = log.FullText;
-                std::transform(logLower.begin(), logLower.end(), logLower.begin(), ::tolower);
+                std::ranges::transform(logLower, logLower.begin(), ::tolower);
                 if (logLower.find(search) == std::string::npos) continue;
             }
 
@@ -226,6 +232,7 @@ struct LogViewerState {
 
 // Global state instance
 LogViewerState g_LogState;
+int g_LastClickedIndex = -1;
 
 std::string CleanLogLine(const std::string& line) {
     // Find the end of the timestamp (first closing bracket)
@@ -236,8 +243,8 @@ std::string CleanLogLine(const std::string& line) {
     if (endBracket != std::string::npos && endBracket < 40) {
         text = line.substr(endBracket + 1);
 
-        // Optional: Remove leading " > " or spaces that might remain
-        size_t firstChar = text.find_first_not_of(" >");
+         // Remove leading " > " or spaces that might remain
+        const size_t firstChar = text.find_first_not_of(" >");
         if (firstChar != std::string::npos) {
             text = text.substr(firstChar);
         }
@@ -245,17 +252,8 @@ std::string CleanLogLine(const std::string& line) {
     return text;
 }
 
-// --- 4. RENDER LOOP (Call this inside your main ImGui loop) ---
 void RenderLogViewer() {
-    // --- 1. Make Window Fill the Entire Application ---
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-
-    // Remove title bar, resize borders, etc. for a "clean" look
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-
-    ImGui::Begin("Unreal Log Reader", nullptr, window_flags);
+    ImGui::Begin("Unreal Log Reader");
 
     // -- Top Bar: Load & Filters --
     if (ImGui::Button("Load Log File")) {
@@ -269,7 +267,7 @@ void RenderLogViewer() {
 
         if (result == NFD_OKAY) {
             g_LogState.LoadFile(outPath); // Load the selected file
-            NFD_FreePath(outPath);        // Remember to free the path memory
+            NFD_FreePath(outPath);
         } else if (result == NFD_CANCEL) {
             // User pressed cancel
         } else {
@@ -287,7 +285,9 @@ void RenderLogViewer() {
     filterChanged |= ImGui::Checkbox("Display", &g_LogState.ShowDisplay); ImGui::SameLine();
     filterChanged |= ImGui::Checkbox("Show Duplicates", &g_LogState.ShowDuplicates);
 
-    //ImGui::SameLine();
+    ImGui::Text("Warnings: %d", g_LogState.LevelsCount[LogLevel::Warning]); ImGui::SameLine();
+    ImGui::Text("Errors: %d", g_LogState.LevelsCount[LogLevel::Error]);
+
     ImGui::SetNextItemWidth(150);
     if (ImGui::BeginCombo("Category", g_LogState.SelectedCategory.c_str())) {
         for (const auto& cat : g_LogState.UniqueCategories) {
@@ -328,7 +328,7 @@ void RenderLogViewer() {
         }
     }
 
-    std::string newCategoryFilter = "";
+    std::string newCategoryFilter;
 
     ImGui::BeginChild("LogScroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
     ImGuiListClipper clipper;
@@ -346,7 +346,7 @@ void RenderLogViewer() {
             else if (log.Category == "LogCook") color = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); // Light Blue
 
             // --- SELECTION LOGIC ---
-            bool isSelected = g_LogState.SelectedIndices.count(i);
+            bool isSelected = g_LogState.SelectedIndices.contains(i);
 
             ImGui::PushStyleColor(ImGuiCol_Text, color);
 
@@ -379,6 +379,7 @@ void RenderLogViewer() {
                     g_LogState.SelectedIndices.clear();
                     g_LogState.SelectedIndices.insert(i);
                     g_LogState.LastClickedIndex = i;
+                    g_LastClickedIndex = log.LogIndex;
                 }
             }
 
@@ -410,6 +411,41 @@ void RenderLogViewer() {
         g_LogState.ApplyFilters();
     }
 
+    ImGui::End();
+
+    // 2. The Context Window
+    ImGui::Begin("Log Context (Inspector)");
+    ImGui::BeginChild("LogContext", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+    if (g_LastClickedIndex != -1 && g_LastClickedIndex < g_LogState.AllLogs.size()) {
+
+        // Calculate bounds (5 before, 5 after)
+        int startIdx = std::max(0, g_LastClickedIndex - 5);
+        int endIdx = std::min(static_cast<int>(g_LogState.AllLogs.size()), g_LastClickedIndex + 6); // +1 because loop is < endIdx
+
+        ImGui::Text("Context around log #%d:", g_LastClickedIndex);
+        ImGui::Separator();
+
+        for (int i = startIdx; i < endIdx; i++) {
+            const auto& log = g_LogState.AllLogs[i];
+
+            // Highlight the specific line we clicked on
+
+            if (i == g_LastClickedIndex) {
+                // Make the selected line stand out with a background color
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1)); // Green text
+            } else {
+                // Dim the surrounding context slightly
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1));
+            }
+
+            ImGui::Text("[%d] %s", i, log.FullText.c_str());
+
+            ImGui::PopStyleColor();
+        }
+    } else {
+        ImGui::TextDisabled("Select a log line to view context.");
+    }
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -473,6 +509,8 @@ int main(int, char**)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
+
 
     // 3. Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -500,13 +538,9 @@ int main(int, char**)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // --- RENDER YOUR APP HERE ---
-        // Just call the function we wrote earlier!
-        RenderLogViewer();
+        ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
 
-        // (Optional) ImGui Demo Window to see what's possible
-        // ImGui::ShowDemoWindow();
-        // ----------------------------
+        RenderLogViewer();
 
         // Rendering
         ImGui::Render();
