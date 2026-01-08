@@ -41,7 +41,11 @@ set(IMGUI_SOURCES
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
-add_executable(UnrealLogsReader src/main.cpp ${IMGUI_SOURCES})
+add_executable(UnrealLogsReader WIN32 src/main.cpp ${IMGUI_SOURCES})
+
+if(MSVC)
+    set_target_properties(UnrealLogsReader PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
+endif()
 
 # --- 4. Include Directories ---
 target_include_directories(UnrealLogsReader PRIVATE
