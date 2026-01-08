@@ -74,32 +74,33 @@ This provides the C++ compiler needed to build the application.
 
 Follow the [Download ImGui](#download-imgui-required-for-all-platforms) instructions above.
 
-### Step 6: Build the Application
+### Step 6: Install make
 
-1. Open **"Developer Command Prompt for VS"** (search for it in Start menu)
-2. Navigate to the project folder:
-   ```cmd
-   cd C:\Users\YourName\Projects\UnrealLogsReader
-   ```
-3. Create a build folder and generate build files:
-   ```cmd
-   mkdir build
-   cd build
-   cmake ..
-   ```
-4. Build the application:
-   ```cmd
-   cmake --build . --config Release
-   ```
-5. The executable will be at `build\Release\UnrealLogsReader.exe`
+Open powershell as an administrator and type the following command:
 
-### Running on Windows
-
-Double-click `UnrealLogsReader.exe` or run from command line:
 ```cmd
-.\Release\UnrealLogsReader.exe
+winget install ezwinports.make
 ```
 
+### Step 7: Build and Run
+
+Use the Makefile to build and run the application:
+
+```cmd
+make run
+```
+
+The executable is located at `.\build\Release\UnrealLogsReader.exe`
+
+## Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make` | Configure and build the project (default target) |
+| `make build` | Same as `make` - configure and build |
+| `make configure` | Create build directory and run CMake configuration |
+| `make run` | Build the project and run the executable |
+| `make clean` | Remove the build and dist directory completely |
 
 ## Usage Guide
 

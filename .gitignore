@@ -41,3 +41,8 @@
 *.dwo
 
 .idea/
+
+# build and executable files
+build/
+dist/
+imgui.ini
