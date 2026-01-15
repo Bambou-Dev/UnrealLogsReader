@@ -92,6 +92,48 @@ make run
 
 The executable is located at `.\build\Release\UnrealLogsReader.exe`
 
+## Linux Setup
+
+These instructions cover Arch Linux, Debian/Ubuntu, and Fedora. Other distributions may require similar packages.
+
+### Step 1: Install Build Tools and CMake
+
+**Arch Linux:**
+```
+sudo pacman -S --needed base-devel cmake
+```
+**Debian**
+```
+sudo apt update
+sudo apt install build-essential cmake
+```
+### Step 2: Install OpenGL and GLFW Development Libraries
+
+**Arch Linux**
+```
+sudo pacman -S mesa glfw-x11
+```
+**Debian**
+```
+sudo apt install libgl1-mesa-dev libglfw3-dev
+```
+
+### Step 3: clone the repo
+```
+git clone https://github.com/Bambou-Dev/UnrealLogsReader.git
+cd UnrealLogsReader
+```
+### Step 4: Build the project
+
+```
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j$(nproc)
+```
+
+you'll find the executable in **UnrealLogsReader/build/UnrealLogsReader**
+
 ## Makefile Commands
 
 | Command | Description |
