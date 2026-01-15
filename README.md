@@ -66,7 +66,7 @@ This provides the C++ compiler needed to build the application.
    ```
 3. Download the project:
    ```cmd
-   git clone https://github.com/YOUR_USERNAME/UnrealLogsReader.git
+   git clone https://github.com/Bambou-Dev/UnrealLogsReader.git
    cd UnrealLogsReader
    ```
 
