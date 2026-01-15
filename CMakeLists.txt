@@ -27,8 +27,12 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
+if(WIN32)
+    add_executable(UnrealLogsReader WIN32 src/main.cpp ${IMGUI_SOURCES})
+else ()
+    add_executable(UnrealLogsReader src/main.cpp ${IMGUI_SOURCES})
+endif ()
 
-add_executable(UnrealLogsReader src/main.cpp ${IMGUI_SOURCES})
 target_include_directories(UnrealLogsReader PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 
 # --- Cross-platform OpenGL link ---
