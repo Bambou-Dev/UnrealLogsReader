@@ -233,6 +233,32 @@ struct LogViewerState {
 // Global state instance
 LogViewerState g_LogState;
 int g_LastClickedIndex = -1;
+std::string g_DroppedFilePath;
+
+// Context window selection state
+std::set<int> g_ContextSelectedIndices; // Stores AllLogs indices
+int g_ContextLastClickedIndex = -1;
+
+void DropCallback(GLFWwindow* /*window*/, int count, const char** paths) {
+    if (count > 0)
+        g_DroppedFilePath = paths[0];
+}
+
+const std::string WHITESPACE = " \n\r\t\f\v";
+
+std::string ltrim(const std::string &s) {
+    const size_t start = s.find_first_not_of(WHITESPACE);
+    return (start == std::string::npos) ? "" : s.substr(start);
+}
+
+std::string rtrim(const std::string &s) {
+    const size_t end = s.find_last_not_of(WHITESPACE);
+    return (end == std::string::npos) ? "" : s.substr(0, end + 1);
+}
+
+std::string trim(const std::string &s) {
+    return rtrim(ltrim(s));
+}
 
 std::string CleanLogLine(const std::string& line) {
     // Find the end of the timestamp (first closing bracket)
@@ -249,7 +275,7 @@ std::string CleanLogLine(const std::string& line) {
             text = text.substr(firstChar);
         }
     }
-    return text;
+    return trim(text);
 }
 
 void RenderLogViewer() {
@@ -380,6 +406,8 @@ void RenderLogViewer() {
                     g_LogState.SelectedIndices.insert(i);
                     g_LogState.LastClickedIndex = i;
                     g_LastClickedIndex = log.LogIndex;
+                    g_ContextSelectedIndices.clear();
+                    g_ContextLastClickedIndex = -1;
                 }
             }
 
@@ -413,34 +441,77 @@ void RenderLogViewer() {
 
     ImGui::End();
 
-    // 2. The Context Window
+    // The Context Window
     ImGui::Begin("Log Context (Inspector)");
+
     ImGui::BeginChild("LogContext", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
     if (g_LastClickedIndex != -1 && g_LastClickedIndex < g_LogState.AllLogs.size()) {
 
         // Calculate bounds (5 before, 5 after)
-        int startIdx = std::max(0, g_LastClickedIndex - 5);
-        int endIdx = std::min(static_cast<int>(g_LogState.AllLogs.size()), g_LastClickedIndex + 6); // +1 because loop is < endIdx
+        int startIdx = std::max(0, g_LastClickedIndex - 8);
+        int endIdx = std::min(static_cast<int>(g_LogState.AllLogs.size()), g_LastClickedIndex + 9);
 
         ImGui::Text("Context around log #%d:", g_LastClickedIndex);
         ImGui::Separator();
 
+        // Ctrl+C: copy selected context lines
+        if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C) && ImGui::IsWindowFocused()) {
+            if (!g_ContextSelectedIndices.empty()) {
+                std::string clipboardText;
+                for (int idx : g_ContextSelectedIndices) {
+                    clipboardText += CleanLogLine(g_LogState.AllLogs[idx].FullText);
+                }
+                ImGui::SetClipboardText(clipboardText.c_str());
+            }
+        }
+
         for (int i = startIdx; i < endIdx; i++) {
             const auto& log = g_LogState.AllLogs[i];
 
-            // Highlight the specific line we clicked on
+            ImGui::PushID(i);
 
-            if (i == g_LastClickedIndex) {
-                // Make the selected line stand out with a background color
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1)); // Green text
-            } else {
-                // Dim the surrounding context slightly
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1));
+            bool isSelected = g_ContextSelectedIndices.contains(i);
+
+            // Highlighted line gets green, others dimmed, but selection overrides to normal brightness
+            ImVec4 color = (i == g_LastClickedIndex)
+                ? ImVec4(0, 1, 0, 1)
+                : (isSelected ? ImVec4(0.95f, 0.96f, 0.98f, 1.0f) : ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+
+            std::string label = "##ctx" + std::to_string(i);
+            if (ImGui::Selectable(label.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns)) {
+                if (ImGui::GetIO().KeyCtrl) {
+                    if (isSelected) g_ContextSelectedIndices.erase(i);
+                    else            g_ContextSelectedIndices.insert(i);
+                    g_ContextLastClickedIndex = i;
+                } else if (ImGui::GetIO().KeyShift && g_ContextLastClickedIndex != -1) {
+                    int rangeStart = std::min(g_ContextLastClickedIndex, i);
+                    int rangeEnd   = std::max(g_ContextLastClickedIndex, i);
+                    g_ContextSelectedIndices.clear();
+                    for (int n = rangeStart; n <= rangeEnd; n++)
+                        g_ContextSelectedIndices.insert(n);
+                } else {
+                    g_ContextSelectedIndices.clear();
+                    g_ContextSelectedIndices.insert(i);
+                    g_ContextLastClickedIndex = i;
+                }
             }
 
+            ImGui::SameLine();
             ImGui::Text("[%d] %s", i, log.FullText.c_str());
 
             ImGui::PopStyleColor();
+
+            if (ImGui::BeginPopupContextItem("ctxmenu")) {
+                if (ImGui::MenuItem("Copy")) {
+                    const std::string text = "```\n" + CleanLogLine(log.FullText) + "\n```";
+                    ImGui::SetClipboardText(text.c_str());
+                }
+                ImGui::EndPopup();
+            }
+
+            ImGui::PopID();
         }
     } else {
         ImGui::TextDisabled("Select a log line to view context.");
@@ -503,6 +574,7 @@ int main(int, char**)
         return 1;
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
+    glfwSetDropCallback(window, DropCallback);
 
     // 2. Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -532,6 +604,11 @@ int main(int, char**)
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+
+        if (!g_DroppedFilePath.empty()) {
+            g_LogState.LoadFile(g_DroppedFilePath);
+            g_DroppedFilePath.clear();
+        }
 
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
