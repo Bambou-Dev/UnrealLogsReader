@@ -24,6 +24,12 @@ struct LogEntry {
     int LogIndex = 0;
 };
 
+struct HighlightWidget {
+    char SearchBuffer[128] = {};
+    ImVec4 Color;
+    int NextOccurrence = 0;
+};
+
 // UE Logs usually look like:
 // [2024.01.01-14.22.33:123] LogCook: Error: Missing Texture...
 // We want to extract "LogCook" (Category) and "Error" (Level)
@@ -234,10 +240,20 @@ struct LogViewerState {
 LogViewerState g_LogState;
 int g_LastClickedIndex = -1;
 std::string g_DroppedFilePath;
+std::vector<HighlightWidget> g_Highlights;
+int g_ScrollToFilteredIndex = -1;
 
 // Context window selection state
 std::set<int> g_ContextSelectedIndices; // Stores AllLogs indices
 int g_ContextLastClickedIndex = -1;
+
+ImVec4 GenerateHighlightColor() {
+    static float hue = 0.15f;
+    hue = fmodf(hue + 0.618033988749f, 1.0f);
+    float r, g, b;
+    ImGui::ColorConvertHSVtoRGB(hue, 0.75f, 0.90f, r, g, b);
+    return ImVec4(r, g, b, 1.0f);
+}
 
 void DropCallback(GLFWwindow* /*window*/, int count, const char** paths) {
     if (count > 0)
@@ -332,9 +348,44 @@ void RenderLogViewer() {
     if (ImGui::InputText("##Search", g_LogState.SearchBuffer, sizeof(g_LogState.SearchBuffer))) {
         filterChanged = true;
     }
+    ImGui::SameLine();
+    if (ImGui::Button("+"))
+        g_Highlights.push_back({"", GenerateHighlightColor(), 0});
 
-    if (filterChanged) {
+    if (filterChanged)
         g_LogState.ApplyFilters();
+
+    for (int h = 0; h < (int)g_Highlights.size(); ) {
+        auto& hw = g_Highlights[h];
+        ImGui::PushID(h);
+        ImGui::PushStyleColor(ImGuiCol_Text, hw.Color);
+        ImGui::SetNextItemWidth(200);
+        ImGui::InputText("##hl", hw.SearchBuffer, sizeof(hw.SearchBuffer));
+        ImGui::SameLine();
+        if (ImGui::Button("Next")) {
+            std::string term = hw.SearchBuffer;
+            std::ranges::transform(term, term.begin(), ::tolower);
+            if (!term.empty() && !g_LogState.FilteredIndices.empty()) {
+                int total = (int)g_LogState.FilteredIndices.size();
+                int start = (hw.NextOccurrence + 1) % total;
+                for (int n = 0; n < total; n++) {
+                    int idx = (start + n) % total;
+                    std::string text = g_LogState.AllLogs[g_LogState.FilteredIndices[idx]].FullText;
+                    std::ranges::transform(text, text.begin(), ::tolower);
+                    if (text.find(term) != std::string::npos) {
+                        hw.NextOccurrence = idx;
+                        g_ScrollToFilteredIndex = idx;
+                        break;
+                    }
+                }
+            }
+        }
+        ImGui::SameLine();
+        bool remove = ImGui::Button("x");
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+        if (remove) g_Highlights.erase(g_Highlights.begin() + h);
+        else h++;
     }
 
     ImGui::Separator();
@@ -360,16 +411,34 @@ void RenderLogViewer() {
     ImGuiListClipper clipper;
     clipper.Begin(g_LogState.FilteredIndices.size());
 
+    if (g_ScrollToFilteredIndex >= 0 && g_ScrollToFilteredIndex < (int)g_LogState.FilteredIndices.size())
+        clipper.IncludeItemsByIndex(g_ScrollToFilteredIndex, g_ScrollToFilteredIndex + 1);
+
     while (clipper.Step()) {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
             int originalIndex = g_LogState.FilteredIndices[i];
             const LogEntry& log = g_LogState.AllLogs[originalIndex];
+
+            if (i == g_ScrollToFilteredIndex) {
+                ImGui::SetScrollHereY(0.5f);
+                g_ScrollToFilteredIndex = -1;
+            }
 
             // --- COLOR LOGIC ---
             ImVec4 color = ImVec4(0.9f, 0.9f, 0.9f, 1.0f); // Default Light Grey
             if (log.Level == LogLevel::Error) color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f); // Red
             else if (log.Level == LogLevel::Warning) color = ImVec4(1.0f, 0.9f, 0.4f, 1.0f); // Yellow
             else if (log.Category == "LogCook") color = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); // Light Blue
+
+            for (const auto& hw : g_Highlights) {
+                if (hw.SearchBuffer[0] == '\0') continue;
+                std::string term = hw.SearchBuffer;
+                std::ranges::transform(term, term.begin(), ::tolower);
+                std::string text = log.FullText;
+                std::ranges::transform(text, text.begin(), ::tolower);
+                if (text.find(term) != std::string::npos)
+                    color = hw.Color;
+            }
 
             // --- SELECTION LOGIC ---
             bool isSelected = g_LogState.SelectedIndices.contains(i);
